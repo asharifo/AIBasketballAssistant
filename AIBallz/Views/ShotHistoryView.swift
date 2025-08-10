@@ -149,3 +149,8 @@ struct StatBubbleView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
+
+#Preview {
+    ShotHistoryView()
+}
+

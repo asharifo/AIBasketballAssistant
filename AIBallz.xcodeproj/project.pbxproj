@@ -29,9 +29,22 @@
 		94EF2D712E43C5BC00D1024E /* AIBallzUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AIBallzUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		944412FE2E48869B0065669B /* Exceptions for "AIBallz" folder in "AIBallz" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 94EF2D592E43C5BA00D1024E /* AIBallz */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		94EF2D5C2E43C5BA00D1024E /* AIBallz */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				944412FE2E48869B0065669B /* Exceptions for "AIBallz" folder in "AIBallz" target */,
+			);
 			path = AIBallz;
 			sourceTree = "<group>";
 		};
@@ -400,6 +413,9 @@
 				DEVELOPMENT_TEAM = 3VXLDG394F;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AIBallz/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access is required to record and analyze your basketball shots for form feedback.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo library access is required to upload existing videos for shot analysis.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -428,6 +444,9 @@
 				DEVELOPMENT_TEAM = 3VXLDG394F;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AIBallz/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access is required to record and analyze your basketball shots for form feedback.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Photo library access is required to upload existing videos for shot analysis.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

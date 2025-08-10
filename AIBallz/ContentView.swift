@@ -7,18 +7,25 @@
 
 import SwiftUI
 
-struct ContentView: View {
+struct MainTabView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        TabView {
+            VideoAnalysisView()
+                .tabItem {
+                    Image(systemName: "video.fill")
+                    Text("Analysis")
+                }
+            
+            ShotHistoryView()
+                .tabItem {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                    Text("History")
+                }
         }
-        .padding()
+        .accentColor(.orange)
     }
 }
 
 #Preview {
-    ContentView()
+    MainTabView()
 }

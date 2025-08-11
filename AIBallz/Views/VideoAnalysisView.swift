@@ -8,6 +8,7 @@ struct VideoAnalysisView: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            // header
             VStack(spacing: 8) {
                 Text("Shot Analysis")
                     .font(.largeTitle).fontWeight(.bold)
@@ -17,7 +18,7 @@ struct VideoAnalysisView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
-
+            //camera preview
             ZStack {
                 if camera.isAuthorized {
                     CameraPreview(session: camera.session)
@@ -29,7 +30,7 @@ struct VideoAnalysisView: View {
                             VStack(spacing: 16) {
                                 Image(systemName: "video.fill")
                                     .font(.system(size: 60))
-                                    .foregroundColor(.orange)
+                                    .foregroundColor(.red)
                                 Text("Camera Not Authorized")
                                     .font(.headline)
                                     .foregroundColor(.secondary)
@@ -39,6 +40,7 @@ struct VideoAnalysisView: View {
             }
             .frame(height: 400)
             .padding(.horizontal)
+            // send frames to pose estimator
             .onAppear {
                 camera.sampleBufferHandler = { buffer in
                     pose.process(sampleBuffer: buffer)
@@ -50,16 +52,7 @@ struct VideoAnalysisView: View {
                 camera.sampleBufferHandler = nil
             }
 
-            // Simple debug readout to confirm tracking (optional; remove later)
-            VStack(spacing: 6) {
-                Text("Body joints: \(pose.bodyJoints.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("Hands detected: \(pose.hands.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
+            // buttons
             HStack(spacing: 16) {
                 Button {
                     camera.isRecording ? camera.stopRecording() : camera.startRecording()

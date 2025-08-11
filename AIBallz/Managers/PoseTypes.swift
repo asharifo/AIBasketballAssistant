@@ -4,14 +4,14 @@ import Vision
 public typealias NormalizedPoint = CGPoint
 
 public enum PoseJoint: String, CaseIterable {
-    // Body
+    // body
     case nose, neck
     case leftShoulder, leftElbow, leftWrist
     case rightShoulder, rightElbow, rightWrist
     case leftHip, leftKnee, leftAnkle
     case rightHip, rightKnee, rightAnkle
 
-    // Minimal hand (applies to each detected hand; Vision does not tag left/right)
+    // hand
     case wrist
     case thumbTip, indexTip, middleTip, ringTip, littleTip
 }

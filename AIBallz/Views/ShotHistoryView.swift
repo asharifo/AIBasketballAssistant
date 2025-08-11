@@ -25,6 +25,7 @@ struct ShotHistoryView : View {
                 StatsSection()
                 RecentShotsSection()
             }
+            .padding(.horizontal)
         }
         .navigationBarHidden(true)
     }
@@ -38,23 +39,30 @@ struct ShotHistoryView : View {
                 .fontWeight(.bold)
                 .foregroundColor(.primary)
             
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 16) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2)) {
                 StatBubbleView(
                     title: "Overall Accuracy",
                     value: String(format: "%.1f%%", 0),
                     icon: "target",
-                    color: .orange
-                )
-                
+                    color: .orange)
                 StatBubbleView(
                     title: "Recent Accuracy",
                     value: String(format: "%.1f%%", 0),
                     icon: "chart.line.uptrend.xyaxis",
-                    color: .green
-                )
+                    color: .teal)
+                StatBubbleView(
+                    title: "Total Shots",
+                    value: "0",
+                    icon: "figure.basketball",
+                    color: .blue)
+                StatBubbleView(
+                    title: "Shots Made",
+                    value: "0",
+                    icon: "checkmark.circle.fill",
+                    color: .green)
             }
+            .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal)
     }
     
     @ViewBuilder
@@ -65,7 +73,6 @@ struct ShotHistoryView : View {
             }
         }
         .pickerStyle(SegmentedPickerStyle())
-        .padding(.horizontal)
     }
     
     @ViewBuilder
@@ -88,7 +95,6 @@ struct ShotHistoryView : View {
                     }
                 )
         }
-        .padding(.horizontal)
     }
     
     @ViewBuilder
@@ -111,7 +117,6 @@ struct ShotHistoryView : View {
                     }
                 )
         }
-        .padding(.horizontal)
     }
 }
 
@@ -120,7 +125,8 @@ struct StatBubbleView: View {
     let value: String
     let icon: String
     let color: Color
-    
+    var height: CGFloat = 120
+
     var body: some View {
         VStack(spacing: 8) {
             HStack {
@@ -129,14 +135,12 @@ struct StatBubbleView: View {
                     .foregroundColor(color)
                 Spacer()
             }
-            
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(value)
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
-                    
                     Text(title)
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -145,8 +149,12 @@ struct StatBubbleView: View {
             }
         }
         .padding()
-        .background(Color.gray.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity)   // expand to full grid cell width
+        .frame(height: height)        // identical height
+        .background(                  // draw background after sizing
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.gray.opacity(0.1))
+        )
     }
 }
 

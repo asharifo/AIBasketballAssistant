@@ -5,6 +5,7 @@ import CoreMedia
 import UIKit
 
 final class PoseEstimator: ObservableObject {
+    // keypoint locations
     @Published var bodyJoints: [PoseJoint: NormalizedPoint] = [:]
     @Published var hands: [[PoseJoint: NormalizedPoint]] = []   // up to 2 hands
 
@@ -20,11 +21,12 @@ final class PoseEstimator: ObservableObject {
     private let throttleFPS: Double = 15
 
     func process(sampleBuffer: CMSampleBuffer) {
-        // throttle Vision load
+        // disregard frame is last run was too recent
         let now = CACurrentMediaTime()
         if now - lastProcessTime < (1.0 / throttleFPS) { return }
         lastProcessTime = now
 
+        // extract CVPixelBuffer
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
 
@@ -33,7 +35,7 @@ final class PoseEstimator: ObservableObject {
             do {
                 try handler.perform([self.bodyRequest, self.handRequest])
 
-                // BODY
+                // read body keypoints
                 var bodyOut: [PoseJoint: NormalizedPoint] = [:]
                 if let bodyObs = self.bodyRequest.results?.first as? VNHumanBodyPoseObservation {
                     let points = try bodyObs.recognizedPoints(.all)
@@ -44,7 +46,7 @@ final class PoseEstimator: ObservableObject {
                     }
                 }
 
-                // HANDS (per observation)
+                // read keypoints from each hand
                 var handsOut: [[PoseJoint: NormalizedPoint]] = []
                 if let handObs = self.handRequest.results as? [VNHumanHandPoseObservation] {
                     for obs in handObs {
@@ -59,6 +61,7 @@ final class PoseEstimator: ObservableObject {
                     }
                 }
 
+                // assign keypoint locations on main queue
                 DispatchQueue.main.async {
                     self.bodyJoints = bodyOut
                     self.hands = handsOut

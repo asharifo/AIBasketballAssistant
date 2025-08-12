@@ -20,10 +20,15 @@ public struct YOLODetection: Identifiable {
 
 
 final class BallHoopDetector: NSObject, ObservableObject {
+    // ball and hoop detections
     @Published private(set) var balls: [YOLODetection] = []
     @Published private(set) var hoops: [YOLODetection] = []
+    
+    // shots and makes counters
+    @Published private(set) var shots: Int = 0
+    @Published private(set) var makes: Int = 0
 
-    private let minConfidence: Float = 0.35
+    private let minConfidence: Float = 0.5
     private let throttleFPS: Double  = 15
 
     private var lastProcessTime: CFTimeInterval = 0

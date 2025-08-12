@@ -42,9 +42,8 @@ struct VideoAnalysisView: View {
             .frame(height: 400)
             .padding(.horizontal)
             // display text indicating presence of hoop and ball
-            .overlay(alignment: .top) {
+            .overlay {
                 HUDOverlay(detector: detector)
-                    .padding(.top, 12)
             }
             
             // send frames to pose estimator

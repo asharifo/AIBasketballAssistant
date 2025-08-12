@@ -39,7 +39,7 @@ final class PoseEstimator: ObservableObject {
                 var bodyOut: [PoseJoint: NormalizedPoint] = [:]
                 if let bodyObs = self.bodyRequest.results?.first as? VNHumanBodyPoseObservation {
                     let points = try bodyObs.recognizedPoints(.all)
-                    for (vnName, p) in points where p.confidence > 0.2 {
+                    for (vnName, p) in points where p.confidence > 0.3 {
                         if let j = mapVNBodyJoint(vnName) {
                             bodyOut[j] = CGPoint(x: CGFloat(p.x), y: CGFloat(p.y))
                         }

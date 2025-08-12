@@ -5,6 +5,7 @@ struct VideoAnalysisView: View {
     @State private var selectedVideo: PhotosPickerItem?
     @StateObject private var camera = CameraController()
     @StateObject private var pose = PoseEstimator()
+    @StateObject private var detector = BallHoopDetector()
 
     var body: some View {
         VStack(spacing: 20) {
@@ -44,6 +45,7 @@ struct VideoAnalysisView: View {
             .onAppear {
                 camera.sampleBufferHandler = { buffer in
                     pose.process(sampleBuffer: buffer)
+                    detector.process(sampleBuffer: buffer)
                 }
                 camera.startSession()
             }
@@ -86,6 +88,3 @@ struct VideoAnalysisView: View {
 }
 
 #Preview { VideoAnalysisView() }
-
-
-

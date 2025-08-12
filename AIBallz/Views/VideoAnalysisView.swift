@@ -41,12 +41,12 @@ struct VideoAnalysisView: View {
             }
             .frame(height: 400)
             .padding(.horizontal)
-            // display text indicating presence of hoop and ball
+            // display text indicating presence of hoop/ball and shot/makes counter
             .overlay {
                 HUDOverlay(detector: detector)
             }
             
-            // send frames to pose estimator
+            // send frames to pose estimator and hoop/ball detector
             .onAppear {
                 camera.sampleBufferHandler = { buffer in
                     pose.process(sampleBuffer: buffer)

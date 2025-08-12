@@ -150,6 +150,3 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         sampleBufferHandler?(sampleBuffer)
     }
 }
-
-
-

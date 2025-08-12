@@ -21,7 +21,7 @@ final class PoseEstimator: ObservableObject {
     private let throttleFPS: Double = 15
 
     func process(sampleBuffer: CMSampleBuffer) {
-        // disregard frame is last run was too recent
+        // disregard frame if last run was too recent
         let now = CACurrentMediaTime()
         if now - lastProcessTime < (1.0 / throttleFPS) { return }
         lastProcessTime = now

@@ -16,7 +16,7 @@ public enum PoseJoint: String, CaseIterable {
     case thumbTip, indexTip, middleTip, ringTip, littleTip
 }
 
-// Map Vision body joint -> unified PoseJoint
+// map Vision body joint -> PoseJoint
 func mapVNBodyJoint(_ name: VNHumanBodyPoseObservation.JointName) -> PoseJoint? {
     switch name {
     case .nose: return .nose
@@ -37,7 +37,7 @@ func mapVNBodyJoint(_ name: VNHumanBodyPoseObservation.JointName) -> PoseJoint? 
     }
 }
 
-// Map Vision hand joint -> unified PoseJoint (minimal)
+// map Vision hand joint -> PoseJoint
 func mapVNHandJoint(_ name: VNHumanHandPoseObservation.JointName) -> PoseJoint? {
     switch name {
     case .wrist: return .wrist

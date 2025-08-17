@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 @main
 struct AIBallzApp: App {
@@ -13,5 +14,6 @@ struct AIBallzApp: App {
         WindowGroup {
             MainTabView()
         }
+        .modelContainer(for: ShotStats.self)
     }
 }

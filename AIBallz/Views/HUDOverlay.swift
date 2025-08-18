@@ -6,9 +6,8 @@ struct HUDOverlay: View {
 
 
     private var message: String? {
-        let noBall = detector.balls.isEmpty
-        let noHoop = detector.hoops.isEmpty
-
+        let noBall = detector.currentBestBall == nil
+        let noHoop = detector.currentBestHoop == nil
 
         if noBall && noHoop { return "Ball and hoop not detected" }
         if noBall { return "Ball not detected" }
@@ -19,6 +18,27 @@ struct HUDOverlay: View {
 
     var body: some View {
         ZStack {
+            // detection dots
+            GeometryReader { proxy in
+                let size = proxy.size
+                ZStack {
+                    if let ball = detector.currentBestBall {
+                        Circle()
+                            .fill(Color.orange.opacity(0.95))
+                            .frame(width: 10, height: 10)
+                            .position(ball.centerInView(size: size))
+                            .shadow(radius: 2)
+                    }
+                    if let hoop = detector.currentBestHoop {
+                        Circle()
+                            .strokeBorder(Color.green.opacity(0.95), lineWidth: 2)
+                            .frame(width: 14, height: 14)
+                            .position(hoop.centerInView(size: size))
+                            .shadow(radius: 2)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
             // Top-centered warning
             VStack {
                 if let message {

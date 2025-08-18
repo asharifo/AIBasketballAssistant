@@ -23,7 +23,7 @@ final class PoseEstimator: ObservableObject {
     @Published private(set) var poseWindow: [PoseFrame] = []
     
     // sliding windows caps
-    private let windowMaxDuration: CFTimeInterval = 2.0 // keep last 2 seconds
+    private let windowMaxDuration: CFTimeInterval = 5.0 // keep last 5 seconds
     private let windowMaxFrames: Int = 90               // keep last 90 frames
 
 
@@ -131,8 +131,3 @@ final class PoseEstimator: ObservableObject {
         return poseWindow
     }
 }
-
-
-
-
-

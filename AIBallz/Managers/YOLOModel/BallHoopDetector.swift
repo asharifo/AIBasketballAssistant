@@ -11,6 +11,7 @@ public enum TargetClass: String {
     case hoop = "Basketball Hoop"
 }
 
+
 public struct YOLODetection: Identifiable {
     public let id = UUID()
     public let cls: TargetClass
@@ -19,38 +20,44 @@ public struct YOLODetection: Identifiable {
 }
 
 
-// sliding-window container for detector frames
-public struct DetectionFrame: Identifiable {
+// history container for per-frame best detections
+public struct BestDetectionFrame: Identifiable {
     public let id = UUID()
     public let timestamp: CFTimeInterval
     public let ball: YOLODetection?
     public let hoop: YOLODetection?
-    public let allDetections: [YOLODetection]
 }
 
 
 final class BallHoopDetector: NSObject, ObservableObject {
-    // ball and hoop detections
-    @Published private(set) var balls: [YOLODetection] = []
-    @Published private(set) var hoops: [YOLODetection] = []
+    // Best detections for the CURRENT frame (for HUD overlay, etc.)
+    @Published private(set) var currentBestBall: YOLODetection?
+    @Published private(set) var currentBestHoop: YOLODetection?
     
     // shots and makes counters
     @Published private(set) var shots: Int = 0
     @Published private(set) var makes: Int = 0
     
+    
     // sliding window config
-    @Published private(set) var detectionWindow: [DetectionFrame] = []
-    private let windowMaxDuration: CFTimeInterval = 2.0   // last 2s
+    @Published private(set) var detectionWindow: [BestDetectionFrame] = []
+    private let windowMaxDuration: CFTimeInterval = 5.0   // last 5s
     private let windowMaxFrames: Int = 90                 // last 90 frames
+    
     
     private let minConfidence: Float = 0.5
     private let throttleFPS: Double  = 15
     private var lastProcessTime: CFTimeInterval = 0
     
+    // orientation
+    private var cameraPosition: AVCaptureDevice.Position = .back
+    func setCameraPosition(_ pos: AVCaptureDevice.Position) { cameraPosition = pos }
+    
+    
     private let visionQueue = DispatchQueue(label: "yolo.vision.queue", qos: .userInitiated)
     private let request: VNCoreMLRequest
-
-
+    
+    
     override init() {
         let configuration = MLModelConfiguration()
         guard let generated = try? best(configuration: configuration) else {
@@ -65,19 +72,23 @@ final class BallHoopDetector: NSObject, ObservableObject {
         super.init()
     }
     
+    
     func process(sampleBuffer: CMSampleBuffer) {
         // Throttle Vision load
         let now = CACurrentMediaTime()
         if now - lastProcessTime < (1.0 / throttleFPS) { return }
         lastProcessTime = now
         
+        
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
         
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
-            orientation: Self.exifOrientationForCurrentDevice(),
+            orientation: self.exifOrientationForCurrentDevice(),
             options: [:]
         )
+        
         
         visionQueue.async { [weak self] in
             guard let self else { return }
@@ -86,17 +97,14 @@ final class BallHoopDetector: NSObject, ObservableObject {
                 self.handleResults()
             } catch {
                 DispatchQueue.main.async {
-                    // clear live outputs
-                    self.balls.removeAll()
-                    self.hoops.removeAll()
+                    // clear live outputs for this frame
+                    self.currentBestBall = nil
+                    self.currentBestHoop = nil
                     
-                    // append an empty frame into the sliding window to maintain continuity
+                    // append empty bests to history to keep continuity
                     let ts = CACurrentMediaTime()
                     self.detectionWindow.append(
-                        DetectionFrame(timestamp: ts,
-                                       ball: nil,
-                                       hoop: nil,
-                                       allDetections: [])
+                        BestDetectionFrame(timestamp: ts, ball: nil, hoop: nil)
                     )
                     self.trimDetectionWindow(now: ts)
                 }
@@ -104,65 +112,64 @@ final class BallHoopDetector: NSObject, ObservableObject {
         }
     }
     
+    
     private func handleResults() {
         guard let results = request.results as? [VNRecognizedObjectObservation] else {
             DispatchQueue.main.async {
-                self.balls.removeAll()
-                self.hoops.removeAll()
+                self.currentBestBall = nil
+                self.currentBestHoop = nil
                 
-                // still keep window continuity with an empty frame
                 let ts = CACurrentMediaTime()
                 self.detectionWindow.append(
-                    DetectionFrame(timestamp: ts,
-                                   ball: nil,
-                                   hoop: nil,
-                                   allDetections: [])
+                    BestDetectionFrame(timestamp: ts, ball: nil, hoop: nil)
                 )
                 self.trimDetectionWindow(now: ts)
             }
             return
         }
         
-        var outBalls: [YOLODetection] = []
-        var outHoops: [YOLODetection] = []
+        
+        var candidatesBall: [YOLODetection] = []
+        var candidatesHoop: [YOLODetection] = []
+        
         
         for obs in results {
             guard let top = obs.labels.first, top.confidence >= minConfidence else { continue }
             let name = top.identifier
-            let rect = obs.boundingBox        // normalized; your rectInView converts later
+            let rect = obs.boundingBox
             let conf = top.confidence
             
+            
             if name == TargetClass.basketball.rawValue {
-                outBalls.append(YOLODetection(cls: .basketball, confidence: conf, bbox: rect))
+                candidatesBall.append(YOLODetection(cls: .basketball, confidence: conf, bbox: rect))
             } else if name == TargetClass.hoop.rawValue {
-                outHoops.append(YOLODetection(cls: .hoop, confidence: conf, bbox: rect))
+                candidatesHoop.append(YOLODetection(cls: .hoop, confidence: conf, bbox: rect))
             }
         }
         
+        
+        // choose max-confidence per class
+        let bestBall = candidatesBall.max(by: { $0.confidence < $1.confidence })
+        let bestHoop = candidatesHoop.max(by: { $0.confidence < $1.confidence })
+        
+        
         DispatchQueue.main.async {
-            // publish latest per-frame arrays (existing behavior)
-            self.balls = outBalls
-            self.hoops = outHoops
-            
-            // compute best-by-confidence for convenience in window frames
-            let bestBall = outBalls.max(by: { $0.confidence < $1.confidence })
-            let bestHoop = outHoops.max(by: { $0.confidence < $1.confidence })
-            
-            // append to sliding window with timestamp
             let ts = CACurrentMediaTime()
+            
+            // publish only the best for the current frame
+            self.currentBestBall = bestBall
+            self.currentBestHoop = bestHoop
+            
+            
+            // append bests to history
             self.detectionWindow.append(
-                DetectionFrame(timestamp: ts,
-                               ball: bestBall,
-                               hoop: bestHoop,
-                               allDetections: outBalls + outHoops)
+                BestDetectionFrame(timestamp: ts, ball: bestBall, hoop: bestHoop)
             )
             self.trimDetectionWindow(now: ts)
         }
     }
     
-    private static func exifOrientationForCurrentDevice() -> CGImagePropertyOrientation {
-        return .right
-    }
+    
     
     private func trimDetectionWindow(now: CFTimeInterval) {
         let cutoff = now - windowMaxDuration
@@ -176,12 +183,38 @@ final class BallHoopDetector: NSObject, ObservableObject {
         }
     }
     
-    func currentDetectionWindow() -> [DetectionFrame] {
+    func currentDetectionWindow() -> [BestDetectionFrame] {
         return detectionWindow
     }
 }
 
-// for visualizing detections in ui
+extension BallHoopDetector {
+    /// Compute the EXIF orientation Vision expects, based on the current device orientation and which camera is active.
+    private func exifOrientationForCurrentDevice() -> CGImagePropertyOrientation {
+        // Fallback when orientation is unknown/faceUp/faceDown
+        func defaultOrientation() -> CGImagePropertyOrientation {
+            return cameraPosition == .front ? .leftMirrored : .right
+        }
+        
+        switch UIDevice.current.orientation {
+        case .portrait:
+            return cameraPosition == .front ? .leftMirrored : .right
+        case .portraitUpsideDown:
+            return cameraPosition == .front ? .rightMirrored : .left
+        case .landscapeLeft:
+            // Home button on the right (old iPhones) – device rotated left
+            return cameraPosition == .front ? .downMirrored : .up
+        case .landscapeRight:
+            // Home button on the left – device rotated right
+            return cameraPosition == .front ? .upMirrored : .down
+        default:
+            return defaultOrientation()
+        }
+    }
+}
+
+
+// for visualizing detections in UI
 public extension YOLODetection {
     func rectInView(size: CGSize) -> CGRect {
         let vx = bbox.origin.x
@@ -193,6 +226,10 @@ public extension YOLODetection {
         let w = vw * size.width
         let h = vh * size.height
         return CGRect(x: x, y: yTopLeft, width: w, height: h)
+    }
+    func centerInView(size: CGSize) -> CGPoint {
+        let r = rectInView(size: size)
+        return CGPoint(x: r.midX, y: r.midY)
     }
 }
 

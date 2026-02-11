@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HUDOverlay: View {
     @ObservedObject var detector: BallHoopDetector
+    @ObservedObject var pose: PoseEstimator
 
 
     private var message: String? {
@@ -18,7 +19,7 @@ struct HUDOverlay: View {
 
     var body: some View {
         ZStack {
-            // detection dots
+            // detection dots + pose keypoints
             GeometryReader { proxy in
                 let size = proxy.size
                 ZStack {
@@ -36,9 +37,34 @@ struct HUDOverlay: View {
                             .position(hoop.centerInView(size: size))
                             .shadow(radius: 2)
                     }
+
+                    // Body keypoints
+                    ForEach(Array(pose.bodyJoints.keys), id: \.self) { joint in
+                        if let p = pose.bodyJoints[joint] {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 8, height: 8)
+                                .position(convertNormalizedPoint(p, in: size))
+                                .shadow(radius: 1)
+                        }
+                    }
+
+                    // Hand keypoints (up to 2 hands)
+                    ForEach(0..<pose.hands.count, id: \.self) { handIndex in
+                        let hand = pose.hands[handIndex]
+                        ForEach(Array(hand.keys), id: \.self) { joint in
+                            if let p = hand[joint] {
+                                Circle()
+                                    .fill(Color.blue)
+                                    .frame(width: 6, height: 6)
+                                    .position(convertNormalizedPoint(p, in: size))
+                            }
+                        }
+                    }
                 }
                 .allowsHitTesting(false)
             }
+
             // Top-centered warning
             VStack {
                 if let message {
@@ -56,19 +82,15 @@ struct HUDOverlay: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-
             // Top-left counters
             VStack(alignment: .leading, spacing: 4) {
                 Text("Shots: \(detector.shots)")
                     .font(.footnote)
-                    .foregroundColor(.white)
-                    .shadow(radius: 1)
-
+                    .foregroundColor(.secondary)
 
                 Text("Makes: \(detector.makes)")
                     .font(.footnote)
-                    .foregroundColor(.white)
-                    .shadow(radius: 1)
+                    .foregroundColor(.secondary)
             }
             .padding(.top, 52)       // sits just below the warning
             .padding(.leading, 18)   // nudge right so it never clips
@@ -77,9 +99,12 @@ struct HUDOverlay: View {
         .animation(.easeInOut(duration: 0.2), value: message)
         .allowsHitTesting(false)
     }
+
+    // Convert Vision normalized coordinates (0..1) to the overlay's coordinate space,
+    // flipping Y because SwiftUI's origin is top-left.
+    private func convertNormalizedPoint(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        let x = point.x * size.width
+        let y = (1.0 - point.y) * size.height
+        return CGPoint(x: x, y: y)
+    }
 }
-
-
-
-
-

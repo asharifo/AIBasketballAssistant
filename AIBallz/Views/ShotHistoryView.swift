@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Charts
+import SwiftData
 
 struct ShotHistoryView : View {
     @State private var selectedTimeRange: TimeRange = .week

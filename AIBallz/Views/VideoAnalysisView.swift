@@ -19,6 +19,8 @@ struct VideoAnalysisView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
+            .padding(.bottom, 50)
+            
             //camera preview
             ZStack {
                 if camera.isAuthorized {
@@ -43,7 +45,9 @@ struct VideoAnalysisView: View {
             .padding(.horizontal)
             // display text indicating presence of hoop/ball and shot/makes counter
             .overlay {
-                HUDOverlay(detector: detector)
+                ZStack {
+                    HUDOverlay(detector: detector, pose: pose)
+                }
             }
             
             // send frames to pose estimator and hoop/ball detector
@@ -93,3 +97,4 @@ struct VideoAnalysisView: View {
 }
 
 #Preview { VideoAnalysisView() }
+

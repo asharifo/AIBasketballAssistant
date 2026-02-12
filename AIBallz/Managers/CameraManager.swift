@@ -13,6 +13,7 @@ final class CameraController: NSObject, ObservableObject {
     private var videoDeviceInput: AVCaptureDeviceInput?
 
     var sampleBufferHandler: ((CMSampleBuffer) -> Void)?
+    var activeCameraPosition: AVCaptureDevice.Position { videoDeviceInput?.device.position ?? .back }
 
     override init() {
         super.init()
@@ -82,11 +83,13 @@ final class CameraController: NSObject, ObservableObject {
                 self.session.addOutput(self.videoDataOutput)
             }
 
-            // Orientations
-            if let c1 = self.videoDataOutput.connection(with: .video),
-               c1.isVideoOrientationSupported { c1.videoOrientation = .portrait }
-            if let c2 = self.movieOutput.connection(with: .video),
-               c2.isVideoOrientationSupported { c2.videoOrientation = .portrait }
+            // Keep processing and recording in portrait to match the UI preview.
+            if let c1 = self.videoDataOutput.connection(with: .video) {
+                self.applyPortraitRotation(to: c1)
+            }
+            if let c2 = self.movieOutput.connection(with: .video) {
+                self.applyPortraitRotation(to: c2)
+            }
 
             self.session.commitConfiguration()
             self.startSession()
@@ -109,8 +112,9 @@ final class CameraController: NSObject, ObservableObject {
 
     func startRecording() {
         guard !movieOutput.isRecording else { return }
-        if let c = movieOutput.connection(with: .video),
-           c.isVideoOrientationSupported { c.videoOrientation = .portrait }
+        if let c = movieOutput.connection(with: .video) {
+            applyPortraitRotation(to: c)
+        }
         let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("mov")
@@ -122,6 +126,12 @@ final class CameraController: NSObject, ObservableObject {
         guard movieOutput.isRecording else { return }
         movieOutput.stopRecording()
         DispatchQueue.main.async { self.isRecording = false }
+    }
+
+    private func applyPortraitRotation(to connection: AVCaptureConnection) {
+        if connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
+        }
     }
 }
 

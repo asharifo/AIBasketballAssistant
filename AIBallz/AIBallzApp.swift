@@ -7,6 +7,6 @@ struct AIBallzApp: App {
         WindowGroup {
             MainTabView()
         }
-        .modelContainer(for: ShotStats.self)
+        .modelContainer(for: ShotRecord.self)
     }
 }

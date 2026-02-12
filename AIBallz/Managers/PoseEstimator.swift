@@ -38,6 +38,11 @@ final class PoseEstimator: ObservableObject {
     private let visionQueue = DispatchQueue(label: "pose.vision.queue")
     private var lastProcessTime: CFTimeInterval = 0
     private let throttleFPS: Double = 15
+    private var cameraPosition: AVCaptureDevice.Position = .back
+
+    func setCameraPosition(_ position: AVCaptureDevice.Position) {
+        cameraPosition = position
+    }
 
 
     func process(sampleBuffer: CMSampleBuffer) {
@@ -49,7 +54,12 @@ final class PoseEstimator: ObservableObject {
 
         // extract CVPixelBuffer
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        let orientation = exifOrientationForCurrentDevice()
+        let handler = VNImageRequestHandler(
+            cvPixelBuffer: pixelBuffer,
+            orientation: orientation,
+            options: [:]
+        )
 
 
         visionQueue.async { [weak self] in
@@ -71,7 +81,7 @@ final class PoseEstimator: ObservableObject {
 
                 // read keypoints from each hand
                 var handsOut: [[PoseJoint: NormalizedPoint]] = []
-                if let handObs = self.handRequest.results as? [VNHumanHandPoseObservation] {
+                if let handObs = self.handRequest.results {
                     for obs in handObs {
                         let pts = try obs.recognizedPoints(.all)
                         var oneHand: [PoseJoint: NormalizedPoint] = [:]
@@ -129,5 +139,26 @@ final class PoseEstimator: ObservableObject {
 
     func currentPoseWindow() -> [PoseFrame] {
         return poseWindow
+    }
+}
+
+extension PoseEstimator {
+    private func exifOrientationForCurrentDevice() -> CGImagePropertyOrientation {
+        func defaultOrientation() -> CGImagePropertyOrientation {
+            cameraPosition == .front ? .leftMirrored : .right
+        }
+
+        switch UIDevice.current.orientation {
+        case .portrait:
+            return cameraPosition == .front ? .leftMirrored : .right
+        case .portraitUpsideDown:
+            return cameraPosition == .front ? .rightMirrored : .left
+        case .landscapeLeft:
+            return cameraPosition == .front ? .downMirrored : .up
+        case .landscapeRight:
+            return cameraPosition == .front ? .upMirrored : .down
+        default:
+            return defaultOrientation()
+        }
     }
 }

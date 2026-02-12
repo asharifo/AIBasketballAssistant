@@ -284,6 +284,8 @@
 /* Begin XCBuildConfiguration section */
 		94EF2D792E43C5BC00D1024E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 94EF2D5C2E43C5BA00D1024E /* AIBallz */;
+			baseConfigurationReferenceRelativePath = config/Dev.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -405,6 +407,8 @@
 		};
 		94EF2D7C2E43C5BC00D1024E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 94EF2D5C2E43C5BA00D1024E /* AIBallz */;
+			baseConfigurationReferenceRelativePath = config/Dev.xcconfig;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -471,6 +475,8 @@
 		};
 		94EF2D7F2E43C5BC00D1024E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 94EF2D5C2E43C5BA00D1024E /* AIBallz */;
+			baseConfigurationReferenceRelativePath = config/Dev.xcconfig;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
@@ -509,6 +515,8 @@
 		};
 		94EF2D822E43C5BC00D1024E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 94EF2D5C2E43C5BA00D1024E /* AIBallz */;
+			baseConfigurationReferenceRelativePath = config/Dev.xcconfig;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -551,7 +559,7 @@
 				94EF2D7A2E43C5BC00D1024E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		94EF2D7B2E43C5BC00D1024E /* Build configuration list for PBXNativeTarget "AIBallz" */ = {
 			isa = XCConfigurationList;
@@ -560,7 +568,7 @@
 				94EF2D7D2E43C5BC00D1024E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		94EF2D7E2E43C5BC00D1024E /* Build configuration list for PBXNativeTarget "AIBallzTests" */ = {
 			isa = XCConfigurationList;
@@ -569,7 +577,7 @@
 				94EF2D802E43C5BC00D1024E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		94EF2D812E43C5BC00D1024E /* Build configuration list for PBXNativeTarget "AIBallzUITests" */ = {
 			isa = XCConfigurationList;
@@ -578,7 +586,7 @@
 				94EF2D832E43C5BC00D1024E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
 	};

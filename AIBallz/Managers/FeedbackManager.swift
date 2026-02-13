@@ -21,13 +21,17 @@ struct FeedbackManager {
     func requestFormFeedback(
         shot: ShotRecord,
         poseWindow: [PoseFrame],
-        detectionWindow: [BestDetectionFrame]
+        detectionWindow: [BestDetectionFrame],
+        bearerToken: String? = nil
     ) async throws -> String {
         let endpoint = try feedbackEndpointURL()
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
 
         let payload = ShotFeedbackRequest(
             shot: ShotPayload(

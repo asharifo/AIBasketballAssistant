@@ -4,6 +4,7 @@ import SwiftData
 
 struct VideoAnalysisView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var authManager: AuthManager
     @Query(sort: \ShotRecord.timestamp, order: .forward) private var shotRecords: [ShotRecord]
 
     @State private var selectedVideo: PhotosPickerItem?
@@ -181,10 +182,12 @@ struct VideoAnalysisView: View {
     ) {
         Task {
             do {
+                let accessToken = await authManager.validAccessTokenIfAvailable()
                 let feedback = try await feedbackManager.requestFormFeedback(
                     shot: shot,
                     poseWindow: poseSnapshot,
-                    detectionWindow: detectionSnapshot
+                    detectionWindow: detectionSnapshot,
+                    bearerToken: accessToken
                 )
                 await MainActor.run {
                     shot.llmFormFeedback = feedback
@@ -212,4 +215,7 @@ struct VideoAnalysisView: View {
     }
 }
 
-#Preview { VideoAnalysisView() }
+#Preview {
+    VideoAnalysisView()
+        .environmentObject(AuthManager())
+}

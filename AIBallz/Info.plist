@@ -2,6 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AUTH0_AUDIENCE</key>
+	<string></string>
+	<key>AUTH0_CALLBACK_SCHEME</key>
+	<string>aiballz</string>
+	<key>AUTH0_CLIENT_ID</key>
+	<string>YOUR_AUTH0_CLIENT_ID</string>
+	<key>AUTH0_DOMAIN</key>
+	<string>YOUR_AUTH0_DOMAIN</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>aiballz</string>
+			</array>
+		</dict>
+	</array>
 	<key>FEEDBACK_API_BASE_URL</key>
 	<string>http://127.0.0.1:8000</string>
 	<key>NSAppTransportSecurity</key>

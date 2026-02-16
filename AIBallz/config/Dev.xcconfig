@@ -1,1 +1,4 @@
 FEEDBACK_API_BASE_URL = 192.168.1.32
+AUTH0_DOMAIN = dev-yabyyh2dorh3tta3.us.auth0.com
+AUTH0_CLIENT_ID = lmygRmEvv1IE0xiQW6htUU2OgTmHNrdv
+AUTH0_AUDIENCE = https://dev-yabyyh2dorh3tta3.us.auth0.com/api/v2/

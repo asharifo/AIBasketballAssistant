@@ -1,13 +1,18 @@
-import Foundation
-import CoreML
-import Vision
 import AVFoundation
+import CoreGraphics
+import CoreML
 import CoreMedia
-import UIKit
+import Foundation
+import Vision
 
 public enum TargetClass: String {
     case basketball = "Basketball"
     case hoop = "Basketball Hoop"
+}
+
+public enum AnalysisInputSource: String, Codable {
+    case liveCamera = "live_camera"
+    case uploadedVideo = "uploaded_video"
 }
 
 public struct YOLODetection: Identifiable {
@@ -24,29 +29,59 @@ public struct BestDetectionFrame: Identifiable {
     public let hoop: YOLODetection?
 }
 
-final class BallHoopDetector: NSObject, ObservableObject {
+public struct ShotDetectionDiagnostics {
+    public let reason: String
+    public let poseReleaseConfidence: Double
+    public let sawBallAboveRim: Bool
+    public let crossingOffsetPixels: CGFloat?
+    public let centeredAtRim: Bool?
+    public let stayedNearCenterBelow: Bool?
 
+    public var summary: String {
+        let offsetString: String
+        if let crossingOffsetPixels {
+            offsetString = String(format: "%.1f", crossingOffsetPixels)
+        } else {
+            offsetString = "n/a"
+        }
+
+        return "reason=\(reason), pose=\(String(format: "%.2f", poseReleaseConfidence)), aboveRim=\(sawBallAboveRim), crossingOffsetPx=\(offsetString), centeredAtRim=\(centeredAtRim?.description ?? "n/a"), stayedNearCenter=\(stayedNearCenterBelow?.description ?? "n/a")"
+    }
+}
+
+public struct DetectedShotEvent: Identifiable {
+    public let id = UUID()
+    public let timestamp: CFTimeInterval
+    public let isMake: Bool
+    public let confidence: Double
+    public let source: AnalysisInputSource
+    public let diagnostics: ShotDetectionDiagnostics
+
+    public var debugSummary: String {
+        "source=\(source.rawValue), outcome=\(isMake ? "make" : "miss"), confidence=\(String(format: "%.2f", confidence)), \(diagnostics.summary)"
+    }
+}
+
+final class BallHoopDetector: NSObject, ObservableObject {
     @Published private(set) var currentBestBall: YOLODetection?
     @Published private(set) var currentBestHoop: YOLODetection?
 
     @Published private(set) var shots: Int = 0
     @Published private(set) var makes: Int = 0
     @Published private(set) var lastShotResultText: String = "Waiting..."
+    @Published private(set) var lastShotDebugSummary: String = ""
     @Published private(set) var overlayImageSize: CGSize = .zero
 
+    @Published private(set) var shotEvents: [DetectedShotEvent] = []
     @Published private(set) var detectionWindow: [BestDetectionFrame] = []
     private let windowMaxDuration: CFTimeInterval = 5.0
     private let windowMaxFrames: Int = 90
 
-    // Throttle Vision load
     private let throttleFPS: Double = 15
     private var lastProcessTime: CFTimeInterval = 0
 
-    // Orientation
-    private var cameraPosition: AVCaptureDevice.Position = .back
-    func setCameraPosition(_ pos: AVCaptureDevice.Position) { cameraPosition = pos }
-
     private let visionQueue = DispatchQueue(label: "yolo.vision.queue", qos: .userInitiated)
+    private let visionQueueKey = DispatchSpecificKey<Void>()
     private let request: VNCoreMLRequest
 
     private var frameCount: Int = 0
@@ -55,6 +90,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
     private struct TrackPoint {
         var center: CGPoint
         var frame: Int
+        var timestamp: CFTimeInterval
         var w: CGFloat
         var h: CGFloat
         var conf: Float
@@ -63,15 +99,15 @@ final class BallHoopDetector: NSObject, ObservableObject {
 
     private struct TrackState {
         var latest: TrackPoint
-        var velocity: CGVector // pixels per processed frame
-        var missedFrames: Int
+        var velocity: CGVector // pixels per second
+        var missedTime: CFTimeInterval
     }
 
     private struct TrackTuning {
-        let occlusionToleranceFrames: Int
+        let occlusionToleranceSeconds: CFTimeInterval
         let associationDistanceMultiplier: CGFloat
         let minAssociationDistance: CGFloat
-        let maxSpeedPerFrame: CGFloat
+        let maxSpeedPerSecond: CGFloat
         let measurementBlend: CGFloat
         let reacquireConfidence: Float
     }
@@ -83,13 +119,8 @@ final class BallHoopDetector: NSObject, ObservableObject {
 
     private enum ShotPhase {
         case idle
-        case tracking(startFrame: Int)
-        case cooldown(untilFrame: Int)
-    }
-
-    private enum ShotEvent {
-        case make
-        case miss
+        case tracking(startTime: CFTimeInterval)
+        case cooldown(untilTime: CFTimeInterval)
     }
 
     // Track histories (include predicted points to bridge short occlusions)
@@ -101,28 +132,43 @@ final class BallHoopDetector: NSObject, ObservableObject {
     private var shotPhase: ShotPhase = .idle
     private var sawBallAboveRimInAttempt = false
     private var rimCrossingX: CGFloat?
-    private var rimCrossingFrame: Int?
+    private var rimCrossingTime: CFTimeInterval?
+    private var maxPoseReleaseConfidenceInAttempt: Double = 0
+    private var attemptSource: AnalysisInputSource = .liveCamera
 
     // Confidence thresholds
     private let hoopMinConf: Float = 0.50
     private let ballMinConf: Float = 0.30
     private let ballNearHoopMinConf: Float = 0.15
 
+    // Shot-state tuning (time-based)
+    private let noTargetTrackingTimeout: CFTimeInterval = 4.0
+    private let crossingSettleTimeout: CFTimeInterval = 0.9
+    private let attemptTimeout: CFTimeInterval = 3.6
+    private let cooldownDuration: CFTimeInterval = 0.8
+
+    // Velocity thresholds (pixels per second)
+    private let upwardVelocityThreshold: CGFloat = -22.0
+    private let strongUpwardVelocityThreshold: CGFloat = -36.0
+    private let downwardVelocityThreshold: CGFloat = 22.0
+    private let sidewaysEscapeVelocityThreshold: CGFloat = 12.0
+    private let minPoseReleaseForArm: Double = 0.33
+
     // Tracking tuning
     private let ballTracking = TrackTuning(
-        occlusionToleranceFrames: 12,
+        occlusionToleranceSeconds: 0.8,
         associationDistanceMultiplier: 3.0,
         minAssociationDistance: 28.0,
-        maxSpeedPerFrame: 110.0,
+        maxSpeedPerSecond: 1650.0,
         measurementBlend: 0.78,
         reacquireConfidence: 0.60
     )
 
     private let hoopTracking = TrackTuning(
-        occlusionToleranceFrames: 45,
+        occlusionToleranceSeconds: 3.0,
         associationDistanceMultiplier: 1.8,
         minAssociationDistance: 22.0,
-        maxSpeedPerFrame: 20.0,
+        maxSpeedPerSecond: 300.0,
         measurementBlend: 0.60,
         reacquireConfidence: 0.70
     )
@@ -138,61 +184,163 @@ final class BallHoopDetector: NSObject, ObservableObject {
         let req = VNCoreMLRequest(model: vnModel)
         req.imageCropAndScaleOption = .scaleFill
         self.request = req
+
         super.init()
+        visionQueue.setSpecific(key: visionQueueKey, value: ())
     }
 
-    func process(sampleBuffer: CMSampleBuffer) {
-        let now = CACurrentMediaTime()
-        if now - lastProcessTime < (1.0 / throttleFPS) { return }
-        lastProcessTime = now
+    func process(
+        sampleBuffer: CMSampleBuffer,
+        cameraPosition: AVCaptureDevice.Position,
+        poseReleaseConfidence: Double? = nil,
+        source: AnalysisInputSource = .liveCamera
+    ) {
+        guard let frame = AnalysisFrameGeometry.liveFrame(
+            from: sampleBuffer,
+            cameraPosition: cameraPosition
+        ) else {
+            return
+        }
 
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let orientation = self.exifOrientationForCurrentDevice()
-        let orientedImageSize = orientedImageSize(
-            frameW: CGFloat(width),
-            frameH: CGFloat(height),
-            orientation: orientation
+        process(
+            frame: frame,
+            poseReleaseConfidence: poseReleaseConfidence,
+            source: source,
+            applyThrottle: true,
+            synchronous: false
         )
+    }
 
-        let handler = VNImageRequestHandler(
-            cvPixelBuffer: pixelBuffer,
-            orientation: orientation,
-            options: [:]
-        )
+    func process(
+        frame: AnalysisFrame,
+        poseReleaseConfidence: Double?,
+        source: AnalysisInputSource,
+        applyThrottle: Bool,
+        synchronous: Bool
+    ) {
+        if synchronous {
+            if DispatchQueue.getSpecific(key: visionQueueKey) != nil {
+                processOnVisionQueue(
+                    frame: frame,
+                    poseReleaseConfidence: poseReleaseConfidence ?? 0,
+                    source: source,
+                    applyThrottle: applyThrottle,
+                    publishSynchronously: true
+                )
+            } else {
+                visionQueue.sync {
+                    processOnVisionQueue(
+                        frame: frame,
+                        poseReleaseConfidence: poseReleaseConfidence ?? 0,
+                        source: source,
+                        applyThrottle: applyThrottle,
+                        publishSynchronously: true
+                    )
+                }
+            }
+            return
+        }
 
+        let releaseSignal = poseReleaseConfidence ?? 0
+        visionQueue.async { [weak self] in
+            self?.processOnVisionQueue(
+                frame: frame,
+                poseReleaseConfidence: releaseSignal,
+                source: source,
+                applyThrottle: applyThrottle,
+                publishSynchronously: false
+            )
+        }
+    }
+
+    func resetSession() {
         visionQueue.async { [weak self] in
             guard let self else { return }
-            do {
-                try handler.perform([self.request])
-                let observations = (self.request.results as? [VNRecognizedObjectObservation]) ?? []
-                self.handleResults(
-                    observations,
-                    frameW: CGFloat(width),
-                    frameH: CGFloat(height),
-                    overlayImageSize: orientedImageSize
-                )
-            } catch {
-                // Keep track continuity on occasional request failures.
-                self.handleResults(
-                    [],
-                    frameW: CGFloat(width),
-                    frameH: CGFloat(height),
-                    overlayImageSize: orientedImageSize
-                )
+            self.lastProcessTime = 0
+            self.frameCount = 0
+            self.ballPos = []
+            self.hoopPos = []
+            self.ballTrack = nil
+            self.hoopTrack = nil
+            self.shotPhase = .idle
+            self.resetAttemptState()
+
+            DispatchQueue.main.async {
+                self.currentBestBall = nil
+                self.currentBestHoop = nil
+                self.overlayImageSize = .zero
+                self.shots = 0
+                self.makes = 0
+                self.lastShotResultText = "Waiting..."
+                self.lastShotDebugSummary = ""
+                self.shotEvents = []
+                self.detectionWindow = []
             }
         }
     }
 
+    func currentDetectionWindow() -> [BestDetectionFrame] {
+        detectionWindow
+    }
+
+    func detectionWindowSlice(around center: CFTimeInterval, radius: CFTimeInterval = 1.25) -> [BestDetectionFrame] {
+        let lower = center - radius
+        let upper = center + radius
+        return detectionWindow.filter { $0.timestamp >= lower && $0.timestamp <= upper }
+    }
+
+    private func processOnVisionQueue(
+        frame: AnalysisFrame,
+        poseReleaseConfidence: Double,
+        source: AnalysisInputSource,
+        applyThrottle: Bool,
+        publishSynchronously: Bool
+    ) {
+        if applyThrottle, frame.timestamp - lastProcessTime < (1.0 / throttleFPS) {
+            return
+        }
+        lastProcessTime = frame.timestamp
+
+        let pixelBuffer = frame.pixelBuffer
+        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+
+        let handler = VNImageRequestHandler(
+            cvPixelBuffer: pixelBuffer,
+            orientation: frame.orientation,
+            options: [:]
+        )
+
+        let observations: [VNRecognizedObjectObservation]
+        do {
+            try handler.perform([request])
+            observations = (request.results as? [VNRecognizedObjectObservation]) ?? []
+        } catch {
+            observations = []
+        }
+
+        handleResults(
+            observations,
+            timestamp: frame.timestamp,
+            frameW: width,
+            frameH: height,
+            overlayImageSize: frame.orientedImageSize,
+            poseReleaseConfidence: poseReleaseConfidence,
+            source: source,
+            publishSynchronously: publishSynchronously
+        )
+    }
+
     private func handleResults(
         _ observations: [VNRecognizedObjectObservation],
+        timestamp: CFTimeInterval,
         frameW: CGFloat,
         frameH: CGFloat,
-        overlayImageSize: CGSize
+        overlayImageSize: CGSize,
+        poseReleaseConfidence: Double,
+        source: AnalysisInputSource,
+        publishSynchronously: Bool
     ) {
-        let timestamp = CACurrentMediaTime()
-
         var candidatesBall: [YOLODetection] = []
         var candidatesHoop: [YOLODetection] = []
 
@@ -220,10 +368,11 @@ final class BallHoopDetector: NSObject, ObservableObject {
             tuning: hoopTracking,
             frameW: frameW,
             frameH: frameH,
-            frame: frameCount
+            frame: frameCount,
+            timestamp: timestamp
         )
         if let point = hoopUpdate.point { hoopPos.append(point) }
-        cleanHoopPos()
+        cleanHoopPos(now: timestamp)
 
         let acceptedBalls: [YOLODetection] = candidatesBall.filter { det in
             if det.confidence >= ballMinConf { return true }
@@ -243,31 +392,34 @@ final class BallHoopDetector: NSObject, ObservableObject {
             tuning: ballTracking,
             frameW: frameW,
             frameH: frameH,
-            frame: frameCount
+            frame: frameCount,
+            timestamp: timestamp
         )
         if let point = ballUpdate.point { ballPos.append(point) }
-        cleanBallPos()
+        cleanBallPos(now: timestamp)
 
-        let shotEvent = shotDetection()
+        let shotEvent = shotDetection(
+            now: timestamp,
+            poseReleaseConfidence: poseReleaseConfidence,
+            source: source
+        )
         frameCount += 1
 
         let publishBall = ballUpdate.displayDetection
         let publishHoop = hoopUpdate.displayDetection
 
-        DispatchQueue.main.async {
+        let update = {
             self.currentBestBall = publishBall
             self.currentBestHoop = publishHoop
             self.overlayImageSize = overlayImageSize
 
             if let shotEvent {
                 self.shots += 1
-                switch shotEvent {
-                case .make:
-                    self.makes += 1
-                    self.lastShotResultText = "Make"
-                case .miss:
-                    self.lastShotResultText = "Miss"
-                }
+                if shotEvent.isMake { self.makes += 1 }
+                self.lastShotResultText = shotEvent.isMake ? "Make" : "Miss"
+                self.lastShotDebugSummary = shotEvent.debugSummary
+                self.shotEvents.append(shotEvent)
+                self.logShotEvent(shotEvent)
             }
 
             self.detectionWindow.append(
@@ -275,13 +427,27 @@ final class BallHoopDetector: NSObject, ObservableObject {
             )
             self.trimDetectionWindow(now: timestamp)
         }
+
+        if publishSynchronously {
+            if Thread.isMainThread {
+                update()
+            } else {
+                DispatchQueue.main.sync(execute: update)
+            }
+        } else {
+            DispatchQueue.main.async(execute: update)
+        }
     }
 
     // MARK: - Shot logic
 
-    private func shotDetection() -> ShotEvent? {
+    private func shotDetection(
+        now: CFTimeInterval,
+        poseReleaseConfidence: Double,
+        source: AnalysisInputSource
+    ) -> DetectedShotEvent? {
         guard let hoop = hoopPos.last, let ball = ballPos.last else {
-            if case .tracking(let startFrame) = shotPhase, frameCount - startFrame > 60 {
+            if case .tracking(let startTime) = shotPhase, now - startTime > noTargetTrackingTimeout {
                 resetAttemptState()
                 shotPhase = .idle
             }
@@ -295,29 +461,35 @@ final class BallHoopDetector: NSObject, ObservableObject {
 
         switch shotPhase {
         case .idle:
-            // Arm only if ball is near hoop and moving up.
-            if nearHoopX &&
-                velocityY < -1.5 &&
-                ball.center.y < hoop.center.y + (2.5 * hoop.h) {
-                shotPhase = .tracking(startFrame: frameCount)
+            let poseSignalReady = poseReleaseConfidence >= minPoseReleaseForArm
+            let strongUpwardSignal = velocityY < strongUpwardVelocityThreshold
+
+            if nearHoopX,
+               velocityY < upwardVelocityThreshold,
+               ball.center.y < hoop.center.y + (2.5 * hoop.h),
+               (poseSignalReady || strongUpwardSignal) {
+                shotPhase = .tracking(startTime: now)
                 sawBallAboveRimInAttempt = ball.center.y < rimY - (0.2 * hoop.h)
                 rimCrossingX = nil
-                rimCrossingFrame = nil
+                rimCrossingTime = nil
+                maxPoseReleaseConfidenceInAttempt = poseReleaseConfidence
+                attemptSource = source
             }
 
-        case .tracking(let startFrame):
+        case .tracking(let startTime):
+            maxPoseReleaseConfidenceInAttempt = max(maxPoseReleaseConfidenceInAttempt, poseReleaseConfidence)
             sawBallAboveRimInAttempt = sawBallAboveRimInAttempt || (ball.center.y < rimY - (0.2 * hoop.h))
 
-            if rimCrossingFrame == nil,
+            if rimCrossingTime == nil,
                sawBallAboveRimInAttempt,
                let crossingX = downwardRimCrossingX(rimY: rimY) {
-                rimCrossingFrame = frameCount
+                rimCrossingTime = now
                 rimCrossingX = crossingX
             }
 
-            if let crossingFrame = rimCrossingFrame, let crossingX = rimCrossingX {
+            if let crossingTime = rimCrossingTime, let crossingX = rimCrossingX {
                 let settledBelowRim = ball.center.y > hoop.center.y + (0.85 * hoop.h)
-                let crossingTimedOut = frameCount - crossingFrame > 14
+                let crossingTimedOut = now - crossingTime > crossingSettleTimeout
 
                 if settledBelowRim || crossingTimedOut {
                     let innerHalfWidth = max(8.0, 0.42 * hoop.w)
@@ -325,26 +497,60 @@ final class BallHoopDetector: NSObject, ObservableObject {
 
                     let centeredAtRim = abs(crossingX - hoop.center.x) <= innerHalfWidth
                     let stayedNearCenterBelow = abs(ball.center.x - hoop.center.x) <= outerHalfWidth
-                    return finalizeAttempt(make: centeredAtRim && stayedNearCenterBelow)
+                    let isMake = centeredAtRim && stayedNearCenterBelow
+
+                    return finalizeAttempt(
+                        make: isMake,
+                        now: now,
+                        hoopCenterX: hoop.center.x,
+                        hoopWidth: hoop.w,
+                        crossingX: crossingX,
+                        centeredAtRim: centeredAtRim,
+                        stayedNearCenterBelow: stayedNearCenterBelow,
+                        poseReleaseConfidence: maxPoseReleaseConfidenceInAttempt,
+                        source: attemptSource,
+                        reason: "rim_crossing"
+                    )
                 }
             } else {
-                let attemptTimedOut = frameCount - startFrame > 55
-                let descendingPastHoop = sawBallAboveRimInAttempt &&
-                    velocityY > 1.5 &&
-                    ball.center.y > hoop.center.y + (0.4 * hoop.h)
-                let escapedSideways = distanceX > max(80.0, 4.2 * hoop.w) && velocityY > 0.8
+                let attemptTimedOut = now - startTime > attemptTimeout
+                let descendingPastHoop = sawBallAboveRimInAttempt
+                    && velocityY > downwardVelocityThreshold
+                    && ball.center.y > hoop.center.y + (0.4 * hoop.h)
+                let escapedSideways = distanceX > max(80.0, 4.2 * hoop.w)
+                    && velocityY > sidewaysEscapeVelocityThreshold
 
                 if attemptTimedOut || descendingPastHoop || escapedSideways {
                     if sawBallAboveRimInAttempt {
-                        return finalizeAttempt(make: false)
+                        let reason: String
+                        if attemptTimedOut {
+                            reason = "attempt_timeout"
+                        } else if descendingPastHoop {
+                            reason = "descending_past_rim"
+                        } else {
+                            reason = "sideways_escape"
+                        }
+
+                        return finalizeAttempt(
+                            make: false,
+                            now: now,
+                            hoopCenterX: hoop.center.x,
+                            hoopWidth: hoop.w,
+                            crossingX: rimCrossingX,
+                            centeredAtRim: nil,
+                            stayedNearCenterBelow: nil,
+                            poseReleaseConfidence: maxPoseReleaseConfidenceInAttempt,
+                            source: attemptSource,
+                            reason: reason
+                        )
                     }
                     resetAttemptState()
                     shotPhase = .idle
                 }
             }
 
-        case .cooldown(let untilFrame):
-            if frameCount >= untilFrame {
+        case .cooldown(let untilTime):
+            if now >= untilTime {
                 shotPhase = .idle
             }
         }
@@ -352,24 +558,68 @@ final class BallHoopDetector: NSObject, ObservableObject {
         return nil
     }
 
-    private func finalizeAttempt(make: Bool) -> ShotEvent {
+    private func finalizeAttempt(
+        make: Bool,
+        now: CFTimeInterval,
+        hoopCenterX: CGFloat,
+        hoopWidth: CGFloat,
+        crossingX: CGFloat?,
+        centeredAtRim: Bool?,
+        stayedNearCenterBelow: Bool?,
+        poseReleaseConfidence: Double,
+        source: AnalysisInputSource,
+        reason: String
+    ) -> DetectedShotEvent {
+        let crossingOffset = crossingX.map { $0 - hoopCenterX }
+        let alignmentScore: Double
+        if let offset = crossingOffset {
+            let maxRelevantOffset = max(12.0, 0.85 * hoopWidth)
+            alignmentScore = 1.0 - min(1.0, Double(abs(offset) / maxRelevantOffset))
+        } else {
+            alignmentScore = 0.35
+        }
+
+        let base = make ? 0.55 : 0.28
+        let confidence = min(
+            max(base + (0.30 * alignmentScore) + (0.25 * poseReleaseConfidence), 0.05),
+            0.99
+        )
+
+        let diagnostics = ShotDetectionDiagnostics(
+            reason: reason,
+            poseReleaseConfidence: poseReleaseConfidence,
+            sawBallAboveRim: sawBallAboveRimInAttempt,
+            crossingOffsetPixels: crossingOffset,
+            centeredAtRim: centeredAtRim,
+            stayedNearCenterBelow: stayedNearCenterBelow
+        )
+
         resetAttemptState()
-        shotPhase = .cooldown(untilFrame: frameCount + 12)
-        return make ? .make : .miss
+        shotPhase = .cooldown(untilTime: now + cooldownDuration)
+
+        return DetectedShotEvent(
+            timestamp: now,
+            isMake: make,
+            confidence: confidence,
+            source: source,
+            diagnostics: diagnostics
+        )
     }
 
     private func resetAttemptState() {
         sawBallAboveRimInAttempt = false
         rimCrossingX = nil
-        rimCrossingFrame = nil
+        rimCrossingTime = nil
+        maxPoseReleaseConfidenceInAttempt = 0
+        attemptSource = .liveCamera
     }
 
     private func currentBallVelocityY() -> CGFloat? {
         guard ballPos.count > 1 else { return nil }
         let previous = ballPos[ballPos.count - 2]
         let current = ballPos[ballPos.count - 1]
-        let frameDelta = max(1, current.frame - previous.frame)
-        return (current.center.y - previous.center.y) / CGFloat(frameDelta)
+        let deltaT = max(0.016, current.timestamp - previous.timestamp)
+        return (current.center.y - previous.center.y) / CGFloat(deltaT)
     }
 
     private func downwardRimCrossingX(rimY: CGFloat) -> CGFloat? {
@@ -397,19 +647,27 @@ final class BallHoopDetector: NSObject, ObservableObject {
         tuning: TrackTuning,
         frameW: CGFloat,
         frameH: CGFloat,
-        frame: Int
+        frame: Int,
+        timestamp: CFTimeInterval
     ) -> TrackUpdate {
         let measurementPoint = measurement.map {
-            trackPointPixels(from: $0, frameW: frameW, frameH: frameH, frame: frame, predicted: false)
+            trackPointPixels(
+                from: $0,
+                frameW: frameW,
+                frameH: frameH,
+                frame: frame,
+                timestamp: timestamp,
+                predicted: false
+            )
         }
 
         if var existing = track {
-            let frameDelta = max(1, frame - existing.latest.frame)
+            let deltaT = max(0.016, timestamp - existing.latest.timestamp)
             let predictedCenter = projectCenter(
                 from: existing.latest.center,
                 velocity: existing.velocity,
-                frameDelta: frameDelta,
-                maxSpeedPerFrame: tuning.maxSpeedPerFrame
+                deltaTime: deltaT,
+                maxSpeedPerSecond: tuning.maxSpeedPerSecond
             )
 
             if let measurement, let measurementPoint {
@@ -421,8 +679,8 @@ final class BallHoopDetector: NSObject, ObservableObject {
                     measurementPoint.center.x - predictedCenter.x,
                     measurementPoint.center.y - predictedCenter.y
                 )
-                let shouldAssociate = distanceToPrediction <= associationRadius ||
-                    measurement.confidence >= tuning.reacquireConfidence
+                let shouldAssociate = distanceToPrediction <= associationRadius
+                    || measurement.confidence >= tuning.reacquireConfidence
 
                 if shouldAssociate {
                     let blendedCenter = CGPoint(
@@ -432,6 +690,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
                     let blendedPoint = TrackPoint(
                         center: clampToFrame(blendedCenter, frameW: frameW, frameH: frameH),
                         frame: frame,
+                        timestamp: timestamp,
                         w: lerp(existing.latest.w, measurementPoint.w, 0.35),
                         h: lerp(existing.latest.h, measurementPoint.h, 0.35),
                         conf: measurement.confidence,
@@ -439,16 +698,16 @@ final class BallHoopDetector: NSObject, ObservableObject {
                     )
 
                     let rawVelocity = CGVector(
-                        dx: (blendedPoint.center.x - existing.latest.center.x) / CGFloat(frameDelta),
-                        dy: (blendedPoint.center.y - existing.latest.center.y) / CGFloat(frameDelta)
+                        dx: (blendedPoint.center.x - existing.latest.center.x) / CGFloat(deltaT),
+                        dy: (blendedPoint.center.y - existing.latest.center.y) / CGFloat(deltaT)
                     )
-                    let cappedVelocity = clampVector(rawVelocity, maxMagnitude: tuning.maxSpeedPerFrame)
+                    let cappedVelocity = clampVector(rawVelocity, maxMagnitude: tuning.maxSpeedPerSecond)
                     existing.velocity = CGVector(
                         dx: (existing.velocity.dx * 0.55) + (cappedVelocity.dx * 0.45),
                         dy: (existing.velocity.dy * 0.55) + (cappedVelocity.dy * 0.45)
                     )
                     existing.latest = blendedPoint
-                    existing.missedFrames = 0
+                    existing.missedTime = 0
                     track = existing
 
                     return TrackUpdate(
@@ -463,12 +722,12 @@ final class BallHoopDetector: NSObject, ObservableObject {
                 }
             }
 
-            if existing.missedFrames < tuning.occlusionToleranceFrames {
-                let predictedVelocity = clampVector(existing.velocity, maxMagnitude: tuning.maxSpeedPerFrame)
+            if existing.missedTime < tuning.occlusionToleranceSeconds {
+                let predictedVelocity = clampVector(existing.velocity, maxMagnitude: tuning.maxSpeedPerSecond)
                 let predictedCenter = clampToFrame(
                     CGPoint(
-                        x: existing.latest.center.x + predictedVelocity.dx,
-                        y: existing.latest.center.y + predictedVelocity.dy
+                        x: existing.latest.center.x + (predictedVelocity.dx * CGFloat(deltaT)),
+                        y: existing.latest.center.y + (predictedVelocity.dy * CGFloat(deltaT))
                     ),
                     frameW: frameW,
                     frameH: frameH
@@ -477,6 +736,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
                 let predictedPoint = TrackPoint(
                     center: predictedCenter,
                     frame: frame,
+                    timestamp: timestamp,
                     w: existing.latest.w,
                     h: existing.latest.h,
                     conf: max(0.05, existing.latest.conf * 0.85),
@@ -487,7 +747,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
                     dx: predictedVelocity.dx * 0.90,
                     dy: predictedVelocity.dy * 0.90
                 )
-                existing.missedFrames += 1
+                existing.missedTime += deltaT
                 track = existing
 
                 return TrackUpdate(
@@ -509,7 +769,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
             let newTrack = TrackState(
                 latest: measurementPoint,
                 velocity: .zero,
-                missedFrames: 0
+                missedTime: 0
             )
             track = newTrack
 
@@ -527,57 +787,67 @@ final class BallHoopDetector: NSObject, ObservableObject {
         return TrackUpdate(point: nil, displayDetection: nil)
     }
 
-    private func cleanBallPos() {
+    private func cleanBallPos(now: CFTimeInterval) {
         if ballPos.count > 1 {
             let previous = ballPos[ballPos.count - 2]
             let current = ballPos[ballPos.count - 1]
-            let frameDelta = max(1, current.frame - previous.frame)
+            let deltaT = max(0.016, current.timestamp - previous.timestamp)
 
             if !current.isPredicted {
                 let distance = hypot(current.center.x - previous.center.x, current.center.y - previous.center.y)
-                let maxDistance = max(30.0, 5.0 * max(previous.w, previous.h)) * CGFloat(frameDelta)
+                let maxDistance = max(
+                    max(30.0, 5.0 * max(previous.w, previous.h)),
+                    ballTracking.maxSpeedPerSecond * CGFloat(deltaT) * 1.3
+                )
                 if distance > maxDistance {
                     _ = ballPos.popLast()
                     if var track = ballTrack {
                         track.latest = previous
                         track.velocity = .zero
-                        track.missedFrames = 0
+                        track.missedTime = 0
                         ballTrack = track
                     }
                 }
             }
         }
 
-        trimHistory(&ballPos, maxAgeFrames: 90)
+        trimHistory(&ballPos, maxAgeSeconds: 6.0, now: now)
     }
 
-    private func cleanHoopPos() {
+    private func cleanHoopPos(now: CFTimeInterval) {
         if hoopPos.count > 1 {
             let previous = hoopPos[hoopPos.count - 2]
             let current = hoopPos[hoopPos.count - 1]
-            let frameDelta = max(1, current.frame - previous.frame)
+            let deltaT = max(0.016, current.timestamp - previous.timestamp)
 
             if !current.isPredicted {
                 let distance = hypot(current.center.x - previous.center.x, current.center.y - previous.center.y)
-                let maxDistance = max(20.0, 1.8 * max(previous.w, previous.h)) * CGFloat(frameDelta)
+                let maxDistance = max(
+                    max(20.0, 1.8 * max(previous.w, previous.h)),
+                    hoopTracking.maxSpeedPerSecond * CGFloat(deltaT) * 1.3
+                )
                 if distance > maxDistance {
                     _ = hoopPos.popLast()
                     if var track = hoopTrack {
                         track.latest = previous
                         track.velocity = .zero
-                        track.missedFrames = 0
+                        track.missedTime = 0
                         hoopTrack = track
                     }
                 }
             }
         }
 
-        trimHistory(&hoopPos, maxAgeFrames: 180)
+        trimHistory(&hoopPos, maxAgeSeconds: 8.0, now: now)
     }
 
-    private func trimHistory(_ history: inout [TrackPoint], maxAgeFrames: Int) {
-        let cutoff = frameCount - maxAgeFrames
-        if let firstToKeep = history.firstIndex(where: { $0.frame >= cutoff }) {
+    private func trimHistory(
+        _ history: inout [TrackPoint],
+        maxAgeSeconds: CFTimeInterval,
+        now: CFTimeInterval
+    ) {
+        let cutoff = now - maxAgeSeconds
+        if let firstToKeep = history.firstIndex(where: { $0.timestamp >= cutoff }) {
             if firstToKeep > 0 { history.removeFirst(firstToKeep) }
         } else if !history.isEmpty {
             history.removeAll()
@@ -592,8 +862,8 @@ final class BallHoopDetector: NSObject, ObservableObject {
         let y1 = hoop.center.y - (1.0 * hoop.h)
         let y2 = hoop.center.y + (0.5 * hoop.h)
 
-        return (x1 < center.x && center.x < x2) &&
-               (y1 < center.y && center.y < y2)
+        return (x1 < center.x && center.x < x2)
+            && (y1 < center.y && center.y < y2)
     }
 
     // MARK: - Pixel conversion helpers (Vision bbox -> OpenCV-like pixel coords)
@@ -603,6 +873,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
         frameW: CGFloat,
         frameH: CGFloat,
         frame: Int,
+        timestamp: CFTimeInterval,
         predicted: Bool
     ) -> TrackPoint {
         let center = centerPixels(fromVisionBBox: det.bbox, frameW: frameW, frameH: frameH)
@@ -610,6 +881,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
         return TrackPoint(
             center: center,
             frame: frame,
+            timestamp: timestamp,
             w: size.width,
             h: size.height,
             conf: det.confidence,
@@ -647,7 +919,6 @@ final class BallHoopDetector: NSObject, ObservableObject {
         var w = widthPx / frameW
         var h = heightPx / frameH
 
-        // Clamp to normalized bounds.
         x = clamp(x, lower: 0.0, upper: 1.0)
         y = clamp(y, lower: 0.0, upper: 1.0)
         w = clamp(w, lower: 0.0, upper: 1.0 - x)
@@ -664,13 +935,13 @@ final class BallHoopDetector: NSObject, ObservableObject {
     private func projectCenter(
         from center: CGPoint,
         velocity: CGVector,
-        frameDelta: Int,
-        maxSpeedPerFrame: CGFloat
+        deltaTime: CFTimeInterval,
+        maxSpeedPerSecond: CGFloat
     ) -> CGPoint {
-        let cappedVelocity = clampVector(velocity, maxMagnitude: maxSpeedPerFrame)
+        let cappedVelocity = clampVector(velocity, maxMagnitude: maxSpeedPerSecond)
         return CGPoint(
-            x: center.x + (cappedVelocity.dx * CGFloat(frameDelta)),
-            y: center.y + (cappedVelocity.dy * CGFloat(frameDelta))
+            x: center.x + (cappedVelocity.dx * CGFloat(deltaTime)),
+            y: center.y + (cappedVelocity.dy * CGFloat(deltaTime))
         )
     }
 
@@ -712,48 +983,8 @@ final class BallHoopDetector: NSObject, ObservableObject {
         }
     }
 
-    func currentDetectionWindow() -> [BestDetectionFrame] { detectionWindow }
-
-    func restoreCounters(shots: Int, makes: Int) {
-        DispatchQueue.main.async {
-            self.shots = max(0, shots)
-            self.makes = max(0, min(makes, shots))
-            self.lastShotResultText = "Waiting..."
-        }
-    }
-}
-
-extension BallHoopDetector {
-    private func orientedImageSize(
-        frameW: CGFloat,
-        frameH: CGFloat,
-        orientation: CGImagePropertyOrientation
-    ) -> CGSize {
-        switch orientation {
-        case .left, .right, .leftMirrored, .rightMirrored:
-            return CGSize(width: frameH, height: frameW)
-        default:
-            return CGSize(width: frameW, height: frameH)
-        }
-    }
-
-    private func exifOrientationForCurrentDevice() -> CGImagePropertyOrientation {
-        func defaultOrientation() -> CGImagePropertyOrientation {
-            cameraPosition == .front ? .leftMirrored : .right
-        }
-
-        switch UIDevice.current.orientation {
-        case .portrait:
-            return cameraPosition == .front ? .leftMirrored : .right
-        case .portraitUpsideDown:
-            return cameraPosition == .front ? .rightMirrored : .left
-        case .landscapeLeft:
-            return cameraPosition == .front ? .downMirrored : .up
-        case .landscapeRight:
-            return cameraPosition == .front ? .upMirrored : .down
-        default:
-            return defaultOrientation()
-        }
+    private func logShotEvent(_ event: DetectedShotEvent) {
+        print("[ShotEvent] \(event.debugSummary)")
     }
 }
 

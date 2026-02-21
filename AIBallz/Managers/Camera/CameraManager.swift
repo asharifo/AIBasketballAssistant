@@ -142,7 +142,10 @@ extension CameraController: AVCaptureFileOutputRecordingDelegate {
                     error: Error?) {
         if let error = error { print("Recording error:", error) }
         PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized || status == .limited else { return }
+            guard status == .authorized || status == .limited else {
+                try? FileManager.default.removeItem(at: outputFileURL)
+                return
+            }
             PHPhotoLibrary.shared().performChanges({
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: outputFileURL)
             }) { _, err in

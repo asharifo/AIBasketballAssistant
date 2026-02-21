@@ -54,28 +54,16 @@ struct VideoAnalysisView: View {
 
     private var previewSection: some View {
         ZStack {
-            if viewModel.camera.isAuthorized {
+            if let uploadPlayer = viewModel.uploadPreviewPlayer {
+                UploadVideoPreview(player: uploadPlayer)
+            } else if viewModel.camera.isAuthorized {
                 CameraPreview(session: viewModel.camera.session)
-                HUDOverlay(detector: viewModel.detector, pose: viewModel.pose)
             } else {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.gray.opacity(0.2))
-                    .overlay {
-                        VStack(spacing: 14) {
-                            Image(systemName: "video.slash.fill")
-                                .font(.system(size: 54))
-                                .foregroundColor(.red)
-                            Text("Camera Not Authorized")
-                                .font(.headline)
-                                .foregroundColor(.secondary)
-                            Button("Open Settings") {
-                                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                                openURL(url)
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                        .padding()
-                    }
+                cameraUnauthorizedPlaceholder
+            }
+
+            if viewModel.uploadPreviewPlayer != nil || viewModel.camera.isAuthorized {
+                HUDOverlay(detector: viewModel.detector, pose: viewModel.pose)
             }
 
             uploadOverlay
@@ -83,6 +71,27 @@ struct VideoAnalysisView: View {
         .frame(height: 400)
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .padding(.horizontal)
+    }
+
+    private var cameraUnauthorizedPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 20)
+            .fill(Color.gray.opacity(0.2))
+            .overlay {
+                VStack(spacing: 14) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: 54))
+                        .foregroundColor(.red)
+                    Text("Camera Not Authorized")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Button("Open Settings") {
+                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                        openURL(url)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+            }
     }
 
     @ViewBuilder

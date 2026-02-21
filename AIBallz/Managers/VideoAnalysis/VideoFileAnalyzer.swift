@@ -34,6 +34,7 @@ final class VideoFileAnalyzer {
     func analyzeVideo(
         at url: URL,
         targetFPS: Double,
+        synchronizeToTimeline: Bool = true,
         progressHandler: @escaping (Double) -> Void,
         frameHandler: @escaping (AnalysisFrame) -> Void
     ) async throws -> Summary {
@@ -75,6 +76,8 @@ final class VideoFileAnalyzer {
 
                     let frameInterval = 1.0 / cappedTargetFPS
                     var nextAcceptedTimestamp = 0.0
+                    var firstSampledTimestamp: Double?
+                    var analysisStartUptime: TimeInterval?
 
                     var totalFrames = 0
                     var sampledFrames = 0
@@ -92,6 +95,22 @@ final class VideoFileAnalyzer {
                             continue
                         }
                         nextAcceptedTimestamp = seconds + frameInterval
+
+                        if synchronizeToTimeline {
+                            if firstSampledTimestamp == nil {
+                                firstSampledTimestamp = seconds
+                                analysisStartUptime = ProcessInfo.processInfo.systemUptime
+                            }
+
+                            if let firstSampledTimestamp, let analysisStartUptime {
+                                let targetElapsed = max(0, seconds - firstSampledTimestamp)
+                                let targetUptime = analysisStartUptime + targetElapsed
+                                let delay = targetUptime - ProcessInfo.processInfo.systemUptime
+                                if delay > 0 {
+                                    Thread.sleep(forTimeInterval: delay)
+                                }
+                            }
+                        }
 
                         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
                         let frame = AnalysisFrameGeometry.fileFrame(

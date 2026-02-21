@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import PhotosUI
 import SwiftData
@@ -23,6 +24,7 @@ final class VideoAnalysisViewModel: ObservableObject {
     }
 
     @Published private(set) var uploadState: UploadAnalysisState = .idle
+    @Published private(set) var uploadPreviewPlayer: AVPlayer?
 
     let camera: CameraController
     let pose: PoseEstimator
@@ -35,6 +37,8 @@ final class VideoAnalysisViewModel: ObservableObject {
     private var shotRepository: ShotRepository?
     private var authManager: AuthManager?
     private var uploadTask: Task<Void, Never>?
+    private var uploadPreviewLooper: AVPlayerLooper?
+    private var hasStartedUploadPreviewPlayback = false
     private var persistedEventIDs: Set<UUID> = []
     private var pendingEventIDs: Set<UUID> = []
     private var pendingShotEvents: [DetectedShotEvent] = []
@@ -78,6 +82,7 @@ final class VideoAnalysisViewModel: ObservableObject {
         uploadTask?.cancel()
         stopLivePipeline()
         analysisEngine.resetSession()
+        clearUploadPreview()
         persistedEventIDs.removeAll()
         pendingEventIDs.removeAll()
         pendingShotEvents.removeAll()
@@ -94,6 +99,7 @@ final class VideoAnalysisViewModel: ObservableObject {
     private func startLivePipeline(resetSession: Bool) {
         if resetSession {
             analysisEngine.resetSession()
+            clearUploadPreview()
             persistedEventIDs.removeAll()
             pendingEventIDs.removeAll()
             pendingShotEvents.removeAll()
@@ -118,6 +124,7 @@ final class VideoAnalysisViewModel: ObservableObject {
         }
         stopLivePipeline()
         analysisEngine.resetSession()
+        clearUploadPreview()
         persistedEventIDs.removeAll()
         pendingEventIDs.removeAll()
         pendingShotEvents.removeAll()
@@ -134,6 +141,7 @@ final class VideoAnalysisViewModel: ObservableObject {
                 .appendingPathExtension("mov")
             try data.write(to: url, options: Data.WritingOptions.atomic)
             tempURL = url
+            configureUploadPreview(with: tempURL)
         } catch {
             uploadState = .failed(error.localizedDescription)
             startLivePipeline(resetSession: true)
@@ -150,8 +158,10 @@ final class VideoAnalysisViewModel: ObservableObject {
             let summary = try await videoFileAnalyzer.analyzeVideo(
                 at: tempURL,
                 targetFPS: 15,
+                synchronizeToTimeline: true,
                 progressHandler: { [weak self] progress in
                     Task { @MainActor [weak self] in
+                        self?.startUploadPreviewIfNeeded()
                         self?.uploadState = .analyzing(progress: progress)
                     }
                 },
@@ -172,6 +182,33 @@ final class VideoAnalysisViewModel: ObservableObject {
         }
 
         startLivePipeline(resetSession: true)
+    }
+
+    private func configureUploadPreview(with url: URL) {
+        let queuePlayer = AVQueuePlayer()
+        queuePlayer.isMuted = true
+        queuePlayer.actionAtItemEnd = .none
+
+        let item = AVPlayerItem(url: url)
+        uploadPreviewLooper = AVPlayerLooper(player: queuePlayer, templateItem: item)
+        hasStartedUploadPreviewPlayback = false
+        uploadPreviewPlayer = queuePlayer
+        queuePlayer.pause()
+    }
+
+    private func clearUploadPreview() {
+        uploadPreviewPlayer?.pause()
+        uploadPreviewPlayer?.replaceCurrentItem(with: nil)
+        uploadPreviewLooper = nil
+        uploadPreviewPlayer = nil
+        hasStartedUploadPreviewPlayback = false
+    }
+
+    private func startUploadPreviewIfNeeded() {
+        guard hasStartedUploadPreviewPlayback == false else { return }
+        hasStartedUploadPreviewPlayback = true
+        uploadPreviewPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        uploadPreviewPlayer?.play()
     }
 
     private func handleDetectedShotEvent(_ event: DetectedShotEvent) {

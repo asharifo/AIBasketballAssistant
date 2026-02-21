@@ -74,6 +74,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
 
     @Published private(set) var shotEvents: [DetectedShotEvent] = []
     @Published private(set) var detectionWindow: [BestDetectionFrame] = []
+    var onShotEvent: ((DetectedShotEvent) -> Void)?
     private let windowMaxDuration: CFTimeInterval = 5.0
     private let windowMaxFrames: Int = 90
 
@@ -420,6 +421,7 @@ final class BallHoopDetector: NSObject, ObservableObject {
                 self.lastShotDebugSummary = shotEvent.debugSummary
                 self.shotEvents.append(shotEvent)
                 self.logShotEvent(shotEvent)
+                self.onShotEvent?(shotEvent)
             }
 
             self.detectionWindow.append(

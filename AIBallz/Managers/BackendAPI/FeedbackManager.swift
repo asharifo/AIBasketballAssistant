@@ -1,6 +1,12 @@
 import Foundation
 import CoreGraphics
 
+struct FeedbackShotInput: Sendable {
+    let shotIndex: Int
+    let isMake: Bool
+    let timestamp: Date
+}
+
 struct FeedbackManager {
     private let session: URLSession
     private let encoder: JSONEncoder
@@ -19,7 +25,7 @@ struct FeedbackManager {
     }
 
     func requestFormFeedback(
-        shot: ShotRecord,
+        shot: FeedbackShotInput,
         poseWindow: [PoseFrame],
         detectionWindow: [BestDetectionFrame],
         bearerToken: String? = nil

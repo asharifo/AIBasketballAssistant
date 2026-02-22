@@ -56,13 +56,13 @@ struct VideoAnalysisView: View {
         ZStack {
             if let uploadPlayer = viewModel.uploadPreviewPlayer {
                 UploadVideoPreview(player: uploadPlayer)
-            } else if viewModel.camera.isAuthorized {
+            } else if viewModel.isCameraAuthorized {
                 CameraPreview(session: viewModel.camera.session)
             } else {
                 cameraUnauthorizedPlaceholder
             }
 
-            if viewModel.uploadPreviewPlayer != nil || viewModel.camera.isAuthorized {
+            if viewModel.uploadPreviewPlayer != nil || viewModel.isCameraAuthorized {
                 HUDOverlay(detector: viewModel.detector, pose: viewModel.pose)
             }
 
@@ -158,21 +158,19 @@ struct VideoAnalysisView: View {
     private var controlsSection: some View {
         HStack(spacing: 16) {
             Button {
-                viewModel.camera.isRecording
-                    ? viewModel.camera.stopRecording()
-                    : viewModel.camera.startRecording()
+                viewModel.toggleRecording()
             } label: {
                 HStack {
-                    Image(systemName: viewModel.camera.isRecording ? "stop.fill" : "camera.fill")
-                    Text(viewModel.camera.isRecording ? "Stop" : "Record Shot")
+                    Image(systemName: recordButtonIcon)
+                    Text(recordButtonTitle)
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(viewModel.camera.isRecording ? .red : .orange)
+                .background(recordButtonColor)
                 .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            .disabled(!viewModel.camera.isAuthorized || viewModel.uploadState.isBusy)
+            .disabled(!viewModel.isCameraAuthorized || viewModel.uploadState.isBusy || viewModel.recordingState == .stopping)
 
             PhotosPicker(selection: $selectedVideo, matching: .videos) {
                 HStack {
@@ -185,19 +183,56 @@ struct VideoAnalysisView: View {
                 .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            .disabled(viewModel.uploadState.isBusy)
+            .disabled(viewModel.uploadState.isBusy || viewModel.recordingState.isActive)
         }
         .padding(.horizontal)
     }
 
     @ViewBuilder
     private var statusSection: some View {
-        if !viewModel.detector.lastShotDebugSummary.isEmpty {
+        if case .failed(let message) = viewModel.recordingState {
+            Text("Recording failed: \(message)")
+                .font(.caption)
+                .foregroundColor(.red)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        } else if !viewModel.detector.lastShotDebugSummary.isEmpty {
             Text(viewModel.detector.lastShotDebugSummary)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
+        }
+    }
+
+    private var recordButtonIcon: String {
+        switch viewModel.recordingState {
+        case .idle, .failed:
+            return "camera.fill"
+        case .starting, .recording, .stopping:
+            return "stop.fill"
+        }
+    }
+
+    private var recordButtonTitle: String {
+        switch viewModel.recordingState {
+        case .idle, .failed:
+            return "Record Shot"
+        case .starting:
+            return "Starting..."
+        case .recording:
+            return "Stop"
+        case .stopping:
+            return "Stopping..."
+        }
+    }
+
+    private var recordButtonColor: Color {
+        switch viewModel.recordingState {
+        case .idle, .failed:
+            return .orange
+        case .starting, .recording, .stopping:
+            return .red
         }
     }
 }

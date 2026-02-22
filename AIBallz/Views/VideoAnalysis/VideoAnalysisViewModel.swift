@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Foundation
 import PhotosUI
 import SwiftData
@@ -6,6 +7,22 @@ import SwiftUI
 
 @MainActor
 final class VideoAnalysisViewModel: ObservableObject {
+    enum LiveRecordSessionState: Equatable {
+        case idle
+        case arming
+        case active
+        case finalizing
+
+        var shouldPersistLiveShots: Bool {
+            switch self {
+            case .active, .finalizing:
+                return true
+            case .idle, .arming:
+                return false
+            }
+        }
+    }
+
     enum UploadAnalysisState: Equatable {
         case idle
         case loading
@@ -25,6 +42,9 @@ final class VideoAnalysisViewModel: ObservableObject {
 
     @Published private(set) var uploadState: UploadAnalysisState = .idle
     @Published private(set) var uploadPreviewPlayer: AVPlayer?
+    @Published private(set) var recordingState: CameraController.RecordingState
+    @Published private(set) var isCameraAuthorized: Bool
+    @Published private(set) var liveRecordSessionState: LiveRecordSessionState = .idle
 
     let camera: CameraController
     let pose: PoseEstimator
@@ -39,6 +59,7 @@ final class VideoAnalysisViewModel: ObservableObject {
     private var uploadTask: Task<Void, Never>?
     private var uploadPreviewLooper: AVPlayerLooper?
     private var hasStartedUploadPreviewPlayback = false
+    private var cancellables = Set<AnyCancellable>()
     private var persistedEventIDs: Set<UUID> = []
     private var pendingEventIDs: Set<UUID> = []
     private var pendingShotEvents: [DetectedShotEvent] = []
@@ -56,12 +77,29 @@ final class VideoAnalysisViewModel: ObservableObject {
         self.videoFileAnalyzer = videoFileAnalyzer
         self.feedbackManager = feedbackManager
         self.analysisEngine = ShotAnalysisEngine(pose: pose, detector: detector)
+        self.recordingState = camera.recordingState
+        self.isCameraAuthorized = camera.isAuthorized
 
         detector.onShotEvent = { [weak self] event in
             Task.detached { @MainActor [weak self] in
                 self?.handleDetectedShotEvent(event)
             }
         }
+
+        camera.$recordingState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.recordingState = state
+                self?.handleRecordingStateChanged(state)
+            }
+            .store(in: &cancellables)
+
+        camera.$isAuthorized
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isAuthorized in
+                self?.isCameraAuthorized = isAuthorized
+            }
+            .store(in: &cancellables)
     }
 
     deinit {
@@ -80,9 +118,13 @@ final class VideoAnalysisViewModel: ObservableObject {
 
     func stop() {
         uploadTask?.cancel()
+        if camera.isRecording {
+            camera.stopRecording()
+        }
         stopLivePipeline()
         analysisEngine.resetSession()
         clearUploadPreview()
+        liveRecordSessionState = .idle
         persistedEventIDs.removeAll()
         pendingEventIDs.removeAll()
         pendingShotEvents.removeAll()
@@ -96,10 +138,23 @@ final class VideoAnalysisViewModel: ObservableObject {
         }
     }
 
+    func toggleRecording() {
+        switch recordingState {
+        case .idle, .failed:
+            beginLiveRecordShotSession()
+            camera.startRecording()
+        case .starting, .recording:
+            camera.stopRecording()
+        case .stopping:
+            break
+        }
+    }
+
     private func startLivePipeline(resetSession: Bool) {
         if resetSession {
             analysisEngine.resetSession()
             clearUploadPreview()
+            liveRecordSessionState = .idle
             persistedEventIDs.removeAll()
             pendingEventIDs.removeAll()
             pendingShotEvents.removeAll()
@@ -125,6 +180,7 @@ final class VideoAnalysisViewModel: ObservableObject {
         stopLivePipeline()
         analysisEngine.resetSession()
         clearUploadPreview()
+        liveRecordSessionState = .idle
         persistedEventIDs.removeAll()
         pendingEventIDs.removeAll()
         pendingShotEvents.removeAll()
@@ -184,6 +240,31 @@ final class VideoAnalysisViewModel: ObservableObject {
         startLivePipeline(resetSession: true)
     }
 
+    private func beginLiveRecordShotSession() {
+        analysisEngine.resetSession()
+        persistedEventIDs.removeAll()
+        pendingEventIDs.removeAll()
+        pendingShotEvents.removeAll()
+        liveRecordSessionState = .arming
+    }
+
+    private func handleRecordingStateChanged(_ state: CameraController.RecordingState) {
+        switch state {
+        case .idle, .failed:
+            liveRecordSessionState = .idle
+        case .starting:
+            if liveRecordSessionState == .idle {
+                liveRecordSessionState = .arming
+            }
+        case .recording:
+            liveRecordSessionState = .active
+        case .stopping:
+            if liveRecordSessionState == .active {
+                liveRecordSessionState = .finalizing
+            }
+        }
+    }
+
     private func configureUploadPreview(with url: URL) {
         let queuePlayer = AVQueuePlayer()
         queuePlayer.isMuted = true
@@ -212,6 +293,10 @@ final class VideoAnalysisViewModel: ObservableObject {
     }
 
     private func handleDetectedShotEvent(_ event: DetectedShotEvent) {
+        if event.source == .liveCamera, liveRecordSessionState.shouldPersistLiveShots == false {
+            return
+        }
+
         flushPendingShotEventsIfNeeded()
 
         guard !persistedEventIDs.contains(event.id), !pendingEventIDs.contains(event.id) else {

@@ -3,14 +3,38 @@ import AVFoundation
 import Photos
 
 final class CameraController: NSObject, ObservableObject {
-    @Published var isRecording = false
+    enum RecordingState: Equatable {
+        case idle
+        case starting
+        case recording
+        case stopping
+        case failed(String)
+
+        var isActive: Bool {
+            switch self {
+            case .starting, .recording, .stopping:
+                return true
+            case .idle, .failed:
+                return false
+            }
+        }
+    }
+
+    @Published private(set) var recordingState: RecordingState = .idle
     @Published var isAuthorized = false
+
+    var isRecording: Bool { recordingState.isActive }
+    var isActivelyRecording: Bool {
+        if case .recording = recordingState { return true }
+        return false
+    }
 
     let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private let movieOutput = AVCaptureMovieFileOutput()
     private let videoDataOutput = AVCaptureVideoDataOutput()
     private var videoDeviceInput: AVCaptureDeviceInput?
+    private var pendingRecordingURL: URL?
 
     var sampleBufferHandler: ((CMSampleBuffer) -> Void)?
     var activeCameraPosition: AVCaptureDevice.Position { videoDeviceInput?.device.position ?? .back }
@@ -111,21 +135,55 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func startRecording() {
-        guard !movieOutput.isRecording else { return }
-        if let c = movieOutput.connection(with: .video) {
-            applyPortraitRotation(to: c)
+        switch recordingState {
+        case .idle, .failed:
+            break
+        case .starting, .recording, .stopping:
+            return
         }
-        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("mov")
-        movieOutput.startRecording(to: fileURL, recordingDelegate: self)
-        DispatchQueue.main.async { self.isRecording = true }
+
+        publishRecordingState(.starting)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.session.isRunning else {
+                self.publishRecordingState(.failed("Camera session is not running."))
+                return
+            }
+            guard !self.movieOutput.isRecording else {
+                self.publishRecordingState(.recording)
+                return
+            }
+
+            if let connection = self.movieOutput.connection(with: .video) {
+                self.applyPortraitRotation(to: connection)
+            }
+
+            let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mov")
+            self.pendingRecordingURL = fileURL
+            self.movieOutput.startRecording(to: fileURL, recordingDelegate: self)
+        }
     }
 
     func stopRecording() {
-        guard movieOutput.isRecording else { return }
-        movieOutput.stopRecording()
-        DispatchQueue.main.async { self.isRecording = false }
+        switch recordingState {
+        case .recording, .starting:
+            break
+        case .idle, .stopping, .failed:
+            return
+        }
+
+        publishRecordingState(.stopping)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.movieOutput.isRecording else {
+                self.pendingRecordingURL = nil
+                self.publishRecordingState(.idle)
+                return
+            }
+            self.movieOutput.stopRecording()
+        }
     }
 
     private func applyPortraitRotation(to connection: AVCaptureConnection) {
@@ -133,14 +191,38 @@ final class CameraController: NSObject, ObservableObject {
             connection.videoRotationAngle = 90
         }
     }
+
+    private func publishRecordingState(_ newState: RecordingState) {
+        DispatchQueue.main.async {
+            self.recordingState = newState
+        }
+    }
 }
 
 extension CameraController: AVCaptureFileOutputRecordingDelegate {
     func fileOutput(_ output: AVCaptureFileOutput,
+                    didStartRecordingTo fileURL: URL,
+                    from connections: [AVCaptureConnection]) {
+        publishRecordingState(.recording)
+    }
+
+    func fileOutput(_ output: AVCaptureFileOutput,
                     didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection],
                     error: Error?) {
-        if let error = error { print("Recording error:", error) }
+        if let expectedURL = pendingRecordingURL, expectedURL != outputFileURL {
+            print("Recording finished for unexpected URL: \(outputFileURL.lastPathComponent)")
+        }
+        pendingRecordingURL = nil
+
+        if let error {
+            print("Recording error:", error)
+            publishRecordingState(.failed(error.localizedDescription))
+            try? FileManager.default.removeItem(at: outputFileURL)
+            return
+        }
+
+        publishRecordingState(.idle)
         PHPhotoLibrary.requestAuthorization { status in
             guard status == .authorized || status == .limited else {
                 try? FileManager.default.removeItem(at: outputFileURL)
